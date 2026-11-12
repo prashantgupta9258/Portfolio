@@ -36,6 +36,13 @@ export default function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [isAdminRoute, setIsAdminRoute] = useState(false);
   const [adminTab, setAdminTab] = useState('dashboard');
+  const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem('admin_authenticated_email');
+    } catch {
+      return null;
+    }
+  });
 
   // Portfolio Data State with localStorage caching for instant UI rendering
   const [profile, setProfile] = useState<UserProfile>(() => {
@@ -85,16 +92,32 @@ export default function App() {
 
   const [isResumeModalOpen, setIsResumeModalOpen] = useState(false);
 
-  // Check URL path or hash for admin route
+  // Check URL path or hash for admin route and clean any legacy redirect query params
   useEffect(() => {
     const checkRoute = () => {
-      const path = window.location.pathname;
-      const hash = window.location.hash;
-      if (path === '/admin' || hash === '#admin') {
-        setIsAdminRoute(true);
-      } else {
-        setIsAdminRoute(false);
+      const rawPath = window.location.pathname || '';
+      const rawSearch = window.location.search || '';
+      const rawHash = window.location.hash || '';
+
+      const path = rawPath.toLowerCase().replace(/\/+$/, '');
+      const hash = rawHash.toLowerCase().replace(/\/+$/, '');
+      const search = rawSearch.toLowerCase();
+
+      const isAdmin =
+        path === '/admin' ||
+        path.endsWith('/admin') ||
+        path.includes('/admin/') ||
+        hash === '#admin' ||
+        hash === '#/admin' ||
+        search.includes('admin');
+
+      // Clean up any malformed '?/&/~and~' query strings if present
+      if (rawSearch.includes('~and~') || rawSearch.startsWith('?/') || rawSearch.includes('/and/')) {
+        const cleanUrl = isAdmin ? '/admin' : '/';
+        window.history.replaceState(null, '', cleanUrl);
       }
+
+      setIsAdminRoute(isAdmin);
     };
     checkRoute();
     window.addEventListener('popstate', checkRoute);
@@ -202,10 +225,21 @@ export default function App() {
 
   // Check strict administrator authorization
   const AUTHORIZED_ADMIN_EMAIL = 'prashantgupta9258@gmail.com';
-  const hasAdminSession = sessionStorage.getItem('admin_authenticated_email')?.toLowerCase() === AUTHORIZED_ADMIN_EMAIL.toLowerCase();
+  const currentSessionEmail = adminSessionEmail || sessionStorage.getItem('admin_authenticated_email');
+  const hasAdminSession = currentSessionEmail?.toLowerCase() === AUTHORIZED_ADMIN_EMAIL.toLowerCase();
   const isAuthorizedAdmin = Boolean(
     hasAdminSession || (user && user.email?.toLowerCase() === AUTHORIZED_ADMIN_EMAIL.toLowerCase())
   );
+
+  const handleExitAdmin = () => {
+    setIsAdminRoute(false);
+    try {
+      window.history.pushState(null, '', '/');
+      window.location.hash = '';
+    } catch {
+      window.location.hash = '';
+    }
+  };
 
   // Render Admin View
   if (isAdminRoute) {
@@ -213,7 +247,9 @@ export default function App() {
       return (
         <AdminLogin
           currentUserEmail={user?.email || null}
+          onBack={handleExitAdmin}
           onSuccess={() => {
+            setAdminSessionEmail(AUTHORIZED_ADMIN_EMAIL);
             setUser(auth.currentUser);
             setIsAdminRoute(true);
           }}
@@ -231,9 +267,9 @@ export default function App() {
           } catch {}
           sessionStorage.removeItem('admin_authenticated_email');
           sessionStorage.removeItem('admin_authenticated_at');
+          setAdminSessionEmail(null);
           setUser(null);
-          setIsAdminRoute(false);
-          window.location.hash = '';
+          handleExitAdmin();
         }}
       >
         {adminTab === 'dashboard' && (

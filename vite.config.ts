@@ -4,8 +4,12 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
+  // Default to '/' for Vercel, Netlify, and local dev so sub-routes like /admin resolve assets from root.
+  // GitHub Actions sets VITE_BASE_PATH='./' for GitHub Pages subfolder compatibility.
+  const base = process.env.VITE_BASE_PATH || '/';
+
   return {
-    base: './',
+    base,
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

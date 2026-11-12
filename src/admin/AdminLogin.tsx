@@ -11,12 +11,13 @@ import { auth } from '../firebase/config';
 interface AdminLoginProps {
   currentUserEmail?: string | null;
   onSuccess: () => void;
+  onBack?: () => void;
 }
 
 const AUTHORIZED_ADMIN_EMAIL = 'prashantgupta9258@gmail.com';
 const AUTHORIZED_ADMIN_PASSWORD = '7818066137@9258';
 
-export default function AdminLogin({ currentUserEmail, onSuccess }: AdminLoginProps) {
+export default function AdminLogin({ currentUserEmail, onSuccess, onBack }: AdminLoginProps) {
   const [email, setEmail] = useState('prashantgupta9258@gmail.com');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -114,13 +115,22 @@ export default function AdminLogin({ currentUserEmail, onSuccess }: AdminLoginPr
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#1e293b] via-[#0f172a] to-[#1e293b] flex items-center justify-center p-4">
       <div className="absolute top-6 left-6">
-        <a
-          href="#"
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 text-white text-sm font-medium hover:bg-white/20 transition-colors shadow-sm"
+        <button
+          type="button"
+          onClick={() => {
+            if (onBack) {
+              onBack();
+            } else {
+              window.history.pushState(null, '', '/');
+              window.location.hash = '';
+              window.dispatchEvent(new PopStateEvent('popstate'));
+            }
+          }}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 text-white text-sm font-medium hover:bg-white/20 transition-colors shadow-sm cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Back to Portfolio</span>
-        </a>
+        </button>
       </div>
 
       <div className="bg-[#fffefb] rounded-3xl max-w-md w-full p-8 sm:p-10 shadow-2xl border border-[#e8e2d5] flex flex-col gap-6 animate-slide-up">
