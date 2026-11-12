@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "Portfolio project entry with title, description, cover image, and metadata.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "description": { "type": "string" },
+        "detailedDescription": { "type": "string" },
+        "image": { "type": "string" },
+        "additionalImages": { "type": "array" },
+        "tags": { "type": "array" },
+        "liveUrl": { "type": "string" },
+        "githubUrl": { "type": "string" },
+        "highlights": { "type": "array" },
+        "architecture": { "type": "array" },
+        "category": { "type": "string" },
+        "featured": { "type": "boolean" },
+        "order": { "type": "number" },
+        "status": { "type": "string", "enum": ["published", "draft"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["title", "description", "status"]
+    },
+    "ResumeInfo": {
+      "title": "ResumeInfo",
+      "description": "Uploaded resume document or image metadata.",
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "fileName": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["url", "fileName"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Portfolio owner profile details and contact links.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "title": { "type": "string" },
+        "email": { "type": "string" },
+        "location": { "type": "string" },
+        "bioSummary": { "type": "string" },
+        "about": { "type": "string" }
+      },
+      "required": ["name", "email"]
+    }
+  },
+  "firestore": {
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Collection of developer portfolio projects."
+    },
+    "/siteSettings/{settingId}": {
+      "schema": "ResumeInfo",
+      "description": "General site settings including resume, profile, and skill configurations."
+    }
+  }
+}
