@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from './firebase/config';
 import { UserProfile, Project, SkillCategory, EducationItem, ResumeInfo } from './types';
 import { initialProfile, initialProjects, initialSkills, initialEducation, initialResume } from './data/initialData';
@@ -153,24 +153,62 @@ export default function App() {
     };
   }, []);
 
-  // Fetch data from Firestore and update localStorage cache
-  const fetchData = async () => {
+  // Helper to reassemble chunked resume from Firestore if needed
+  const resolveResumeData = async (raw: any): Promise<ResumeInfo> => {
+    if (raw && raw.url === 'CHUNKED' && typeof raw.chunkCount === 'number' && raw.chunkCount > 0) {
+      const chunkPromises = [];
+      for (let i = 0; i < raw.chunkCount; i++) {
+        chunkPromises.push(getDoc(doc(db, 'siteSettings', `resume_chunk_${i}`)));
+      }
+      const chunkSnaps = await Promise.all(chunkPromises);
+      const fullUrl = chunkSnaps
+        .map((snap) => (snap.exists() ? (snap.data().data as string) || '' : ''))
+        .join('');
+      return {
+        url: fullUrl,
+        fileName: raw.fileName || 'Resume.pdf',
+        updatedAt: raw.updatedAt || ''
+      };
+    }
+    return {
+      url: raw?.url || '',
+      fileName: raw?.fileName || '',
+      updatedAt: raw?.updatedAt || ''
+    };
+  };
+
+  // Fetch data from Firestore with isolated try/catch blocks per collection
+  // and sync any locally trapped admin uploads to Firestore
+  const fetchData = useCallback(async () => {
+    // 1. Fetch Profile
     try {
-      // Fetch Profile
       const profileSnap = await getDoc(doc(db, 'siteSettings', 'profile'));
       if (profileSnap.exists()) {
         const data = profileSnap.data() as UserProfile;
         setProfile(data);
         localStorage.setItem('portfolio_profile', JSON.stringify(data));
+      } else {
+        const localProfile = localStorage.getItem('portfolio_profile');
+        if (localProfile && localProfile !== JSON.stringify(initialProfile)) {
+          try {
+            await setDoc(doc(db, 'siteSettings', 'profile'), JSON.parse(localProfile));
+          } catch {}
+        }
       }
+    } catch (err) {
+      console.warn('Profile fetch error:', err);
+    }
 
-      // Fetch Projects
-      const projSnap = await getDocs(collection(db, 'projects'));
-      const initSnap = await getDoc(doc(db, 'siteSettings', 'initialized'));
+    // 2. Fetch Projects
+    try {
+      const [projSnap, initSnap] = await Promise.all([
+        getDocs(collection(db, 'projects')),
+        getDoc(doc(db, 'siteSettings', 'initialized'))
+      ]);
       if (!projSnap.empty) {
         const loadedProjects: Project[] = [];
-        projSnap.forEach((doc) => {
-          loadedProjects.push({ id: doc.id, ...doc.data() } as Project);
+        projSnap.forEach((d) => {
+          loadedProjects.push({ id: d.id, ...d.data() } as Project);
         });
         loadedProjects.sort((a, b) => (a.order || 0) - (b.order || 0));
         setProjects(loadedProjects);
@@ -178,39 +216,169 @@ export default function App() {
       } else if (initSnap.exists()) {
         setProjects([]);
         localStorage.setItem('portfolio_projects', JSON.stringify([]));
+      } else {
+        // If Firestore has no projects yet, check if admin has custom projects cached in localStorage
+        const localProjsRaw = localStorage.getItem('portfolio_projects');
+        if (localProjsRaw && localProjsRaw !== JSON.stringify(initialProjects)) {
+          try {
+            const localProjs = JSON.parse(localProjsRaw) as Project[];
+            if (Array.isArray(localProjs) && localProjs.length > 0) {
+              for (const p of localProjs) {
+                const { id, ...rest } = p;
+                await setDoc(doc(db, 'projects', id || `proj_${Date.now()}`), {
+                  ...rest,
+                  status: rest.status || 'published',
+                  updatedAt: serverTimestamp()
+                });
+              }
+            }
+          } catch {}
+        }
       }
+    } catch (err) {
+      console.warn('Projects fetch error:', err);
+    }
 
-      // Fetch Skills
+    // 3. Fetch Skills
+    try {
       const skillsSnap = await getDoc(doc(db, 'siteSettings', 'skills'));
       if (skillsSnap.exists() && skillsSnap.data().categories) {
         const categories = skillsSnap.data().categories as SkillCategory[];
         setSkills(categories);
         localStorage.setItem('portfolio_skills', JSON.stringify(categories));
+      } else {
+        const localSkills = localStorage.getItem('portfolio_skills');
+        if (localSkills && localSkills !== JSON.stringify(initialSkills)) {
+          try {
+            await setDoc(doc(db, 'siteSettings', 'skills'), { categories: JSON.parse(localSkills) });
+          } catch {}
+        }
       }
+    } catch (err) {
+      console.warn('Skills fetch error:', err);
+    }
 
-      // Fetch Education
+    // 4. Fetch Education
+    try {
       const eduSnap = await getDoc(doc(db, 'siteSettings', 'education'));
       if (eduSnap.exists() && eduSnap.data().items) {
         const items = eduSnap.data().items as EducationItem[];
         setEducation(items);
         localStorage.setItem('portfolio_education', JSON.stringify(items));
-      }
-
-      // Fetch Resume
-      const resumeSnap = await getDoc(doc(db, 'siteSettings', 'resume'));
-      if (resumeSnap.exists()) {
-        const resData = resumeSnap.data() as ResumeInfo;
-        setResumeInfo(resData);
-        localStorage.setItem('portfolio_resume', JSON.stringify(resData));
+      } else {
+        const localEdu = localStorage.getItem('portfolio_education');
+        if (localEdu && localEdu !== JSON.stringify(initialEducation)) {
+          try {
+            await setDoc(doc(db, 'siteSettings', 'education'), { items: JSON.parse(localEdu) });
+          } catch {}
+        }
       }
     } catch (err) {
-      console.warn('Using cached or fallback data due to Firestore connection state:', err);
+      console.warn('Education fetch error:', err);
     }
-  };
 
+    // 5. Fetch Resume
+    try {
+      const resumeSnap = await getDoc(doc(db, 'siteSettings', 'resume'));
+      if (resumeSnap.exists()) {
+        const resData = await resolveResumeData(resumeSnap.data());
+        setResumeInfo(resData);
+        localStorage.setItem('portfolio_resume', JSON.stringify(resData));
+      } else {
+        // Sync locally cached resume to cloud if present
+        const localResumeRaw = localStorage.getItem('portfolio_resume');
+        if (localResumeRaw && localResumeRaw !== JSON.stringify(initialResume)) {
+          try {
+            const localResume = JSON.parse(localResumeRaw) as ResumeInfo;
+            if (localResume && localResume.url && localResume.url !== '#') {
+              const CHUNK_SIZE = 650000;
+              if (localResume.url.length > CHUNK_SIZE) {
+                const chunks: string[] = [];
+                for (let i = 0; i < localResume.url.length; i += CHUNK_SIZE) {
+                  chunks.push(localResume.url.slice(i, i + CHUNK_SIZE));
+                }
+                for (let i = 0; i < chunks.length; i++) {
+                  await setDoc(doc(db, 'siteSettings', `resume_chunk_${i}`), {
+                    data: chunks[i],
+                    index: i,
+                    updatedAt: localResume.updatedAt || new Date().toISOString().split('T')[0]
+                  });
+                }
+                await setDoc(doc(db, 'siteSettings', 'resume'), {
+                  url: 'CHUNKED',
+                  chunkCount: chunks.length,
+                  fileName: localResume.fileName,
+                  updatedAt: localResume.updatedAt
+                });
+              } else {
+                await setDoc(doc(db, 'siteSettings', 'resume'), {
+                  url: localResume.url,
+                  chunkCount: 0,
+                  fileName: localResume.fileName,
+                  updatedAt: localResume.updatedAt
+                });
+              }
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      console.warn('Resume fetch error:', err);
+    }
+  }, []);
+
+  // Initial fetch + Real-time Firestore listeners so all visitors see admin updates live
   useEffect(() => {
     fetchData();
-  }, []);
+
+    const unsubProjects = onSnapshot(
+      collection(db, 'projects'),
+      (snap) => {
+        if (!snap.empty) {
+          const loadedProjects: Project[] = [];
+          snap.forEach((d) => {
+            loadedProjects.push({ id: d.id, ...d.data() } as Project);
+          });
+          loadedProjects.sort((a, b) => (a.order || 0) - (b.order || 0));
+          setProjects(loadedProjects);
+          localStorage.setItem('portfolio_projects', JSON.stringify(loadedProjects));
+        }
+      },
+      (err) => console.warn('Projects live listener error:', err)
+    );
+
+    const unsubSettings = onSnapshot(
+      collection(db, 'siteSettings'),
+      async (snap) => {
+        snap.docChanges().forEach(async (change) => {
+          const id = change.doc.id;
+          const data = change.doc.data();
+          if (id === 'profile' && data) {
+            setProfile(data as UserProfile);
+            localStorage.setItem('portfolio_profile', JSON.stringify(data));
+          } else if (id === 'skills' && data?.categories) {
+            setSkills(data.categories as SkillCategory[]);
+            localStorage.setItem('portfolio_skills', JSON.stringify(data.categories));
+          } else if (id === 'education' && data?.items) {
+            setEducation(data.items as EducationItem[]);
+            localStorage.setItem('portfolio_education', JSON.stringify(data.items));
+          } else if (id === 'resume' && data) {
+            try {
+              const resolved = await resolveResumeData(data);
+              setResumeInfo(resolved);
+              localStorage.setItem('portfolio_resume', JSON.stringify(resolved));
+            } catch {}
+          }
+        });
+      },
+      (err) => console.warn('SiteSettings live listener error:', err)
+    );
+
+    return () => {
+      unsubProjects();
+      unsubSettings();
+    };
+  }, [fetchData]);
 
   if (authChecking) {
     return (

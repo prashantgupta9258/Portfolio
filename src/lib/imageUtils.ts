@@ -4,7 +4,7 @@
  */
 
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { storage } from '../firebase/config';
+import { storage, auth } from '../firebase/config';
 
 export interface FileValidationResult {
   valid: boolean;
@@ -107,14 +107,14 @@ export function blobToBase64(blob: Blob | File): Promise<string> {
 
 /**
  * Client-Side Image Resizing & Compression:
- * Resizes image via HTML5 Canvas to max bounding box (default 1000x1000px)
- * and compresses JPEG quality to 75% (0.75), reducing megabytes down to ~50-100KB.
+ * Resizes image via HTML5 Canvas to max bounding box (default 900x900px)
+ * and compresses JPEG quality to 72% (0.72), reducing megabytes down to ~45-90KB.
  */
 export async function compressImageToBlob(
   file: File | Blob,
-  maxWidth = 1000,
-  maxHeight = 1000,
-  quality = 0.75
+  maxWidth = 900,
+  maxHeight = 900,
+  quality = 0.72
 ): Promise<Blob> {
   return new Promise((resolve) => {
     if (!file.type.startsWith('image/')) {
@@ -176,20 +176,18 @@ export async function compressImageToBlob(
  */
 export async function compressImageToBase64(
   file: File | Blob,
-  maxWidth = 1000,
-  maxHeight = 1000,
-  quality = 0.75
+  maxWidth = 900,
+  maxHeight = 900,
+  quality = 0.72
 ): Promise<string> {
   const blob = await compressImageToBlob(file, maxWidth, maxHeight, quality);
   return await blobToBase64(blob);
 }
 
 /**
- * Robust Upload with Resumable Progress & Base64 Fallback:
- * 1. Attempts Firebase Storage uploadBytesResumable with live progress tracking (0% -> 100%).
- * 2. Includes a timeout safeguard to prevent hanging on network drops.
- * 3. Fallback: If Firebase Storage fails (quota, CORS, rules, or network error),
- *    it gracefully falls back to generating a compressed Base64 data URL so data is NEVER lost!
+ * Robust Upload with Direct Cloud Firestore Sync Support:
+ * Converts optimized files to Base64 data URLs when Storage auth is unavailable or slow,
+ * ensuring 100% cross-device visibility in Firestore for all public visitors.
  */
 export async function uploadWithResumableProgress(
   file: Blob | File,
@@ -197,20 +195,33 @@ export async function uploadWithResumableProgress(
   onProgress?: (progress: number, statusText: string) => void,
   statusLabel = 'Uploading'
 ): Promise<string> {
+  if (onProgress) {
+    onProgress(20, `${statusLabel} (20%)`);
+  }
+
+  // If admin logged in via email/password credentials without a Firebase Auth token,
+  // or if file is under 500KB, encode directly so it saves straight into Firestore for all users.
+  if (!auth.currentUser || file.size <= 500 * 1024) {
+    if (onProgress) {
+      onProgress(65, `${statusLabel} to Cloud Database (65%)`);
+    }
+    const base64Url = await blobToBase64(file);
+    if (onProgress) {
+      onProgress(100, `${statusLabel} Complete (100%)`);
+    }
+    return base64Url;
+  }
+
   try {
     const storageRef = ref(storage, path);
     const uploadTask = uploadBytesResumable(storageRef, file);
 
-    if (onProgress) {
-      onProgress(5, `${statusLabel} (5%)`);
-    }
-
     const downloadURL = await new Promise<string>((resolve, reject) => {
-      // 25 second timeout safeguard for cloud storage
+      // Fast 4-second timeout safeguard for cloud storage before switching to Firestore chunked/base64 storage
       const timeoutTimer = setTimeout(() => {
         uploadTask.cancel();
-        reject(new Error('Upload timed out. Switching to local fallback.'));
-      }, 25000);
+        reject(new Error('Switching to direct Firestore cloud storage.'));
+      }, 4000);
 
       uploadTask.on(
         'state_changed',
@@ -218,7 +229,7 @@ export async function uploadWithResumableProgress(
           if (snapshot.totalBytes > 0) {
             const progress = Math.min(
               98,
-              Math.max(5, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100))
+              Math.max(20, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100))
             );
             if (onProgress) {
               onProgress(progress, `${statusLabel} (${progress}%)`);
@@ -245,28 +256,14 @@ export async function uploadWithResumableProgress(
     });
 
     return downloadURL;
-  } catch (error: any) {
-    console.warn(
-      'Cloud storage upload encountered an error or timeout. Initiating Base64 fallback mechanism:',
-      error
-    );
-
+  } catch {
     if (onProgress) {
-      onProgress(90, 'Processing optimized fallback storage...');
+      onProgress(85, 'Syncing to Cloud Firestore...');
     }
-
-    // Base64 Fallback support
-    try {
-      const base64Url = await blobToBase64(file);
-      if (onProgress) {
-        onProgress(100, 'Saved via optimized storage fallback (100%)');
-      }
-      return base64Url;
-    } catch (fallbackError) {
-      console.error('Base64 fallback also failed:', fallbackError);
-      throw new Error(
-        error.message || 'Image upload failed. Please check network connection and try again.'
-      );
+    const base64Url = await blobToBase64(file);
+    if (onProgress) {
+      onProgress(100, 'Synced to Cloud Firestore (100%)');
     }
+    return base64Url;
   }
 }

@@ -6,7 +6,7 @@
 import React, { useState } from 'react';
 import { FileText, Upload, CheckCircle2, Download, Image as ImageIcon, Trash2, AlertTriangle, X, Info } from 'lucide-react';
 import { ResumeInfo } from '../types';
-import { db, storage, auth, handleFirestoreError, OperationType } from '../firebase/config';
+import { db, handleFirestoreError, OperationType } from '../firebase/config';
 import { doc, setDoc } from 'firebase/firestore';
 import { compressImageToBlob, uploadWithResumableProgress, validateResumeFile, formatFileSize } from '../lib/imageUtils';
 
@@ -14,6 +14,8 @@ interface ManageResumeProps {
   resumeInfo: ResumeInfo;
   onRefresh: () => void;
 }
+
+const CHUNK_SIZE = 650000; // ~650KB per Firestore document chunk (safe under 1MB limit)
 
 export default function ManageResume({ resumeInfo, onRefresh }: ManageResumeProps) {
   const [file, setFile] = useState<File | null>(null);
@@ -49,11 +51,6 @@ export default function ManageResume({ resumeInfo, onRefresh }: ManageResumeProp
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file) return;
-    if (!auth.currentUser) {
-      setError('You must be signed in as admin to upload a resume.');
-      setUploadState('error');
-      return;
-    }
     setError('');
     setUploadState('uploading');
     setSuccess(false);
@@ -78,14 +75,43 @@ export default function ManageResume({ resumeInfo, onRefresh }: ManageResumeProp
         'Uploading resume'
       );
 
-      setUploadStatus('Saving resume metadata...');
-      const resumeData: ResumeInfo = {
+      setUploadStatus('Saving resume to cloud database...');
+      const updatedAt = new Date().toISOString().split('T')[0];
+
+      if (url.length > CHUNK_SIZE) {
+        const chunks: string[] = [];
+        for (let i = 0; i < url.length; i += CHUNK_SIZE) {
+          chunks.push(url.slice(i, i + CHUNK_SIZE));
+        }
+        for (let i = 0; i < chunks.length; i++) {
+          setUploadStatus(`Syncing cloud chunk ${i + 1} of ${chunks.length}...`);
+          await setDoc(doc(db, 'siteSettings', `resume_chunk_${i}`), {
+            data: chunks[i],
+            index: i,
+            updatedAt
+          });
+        }
+        await setDoc(doc(db, 'siteSettings', 'resume'), {
+          url: 'CHUNKED',
+          chunkCount: chunks.length,
+          fileName: file.name,
+          updatedAt
+        });
+      } else {
+        await setDoc(doc(db, 'siteSettings', 'resume'), {
+          url,
+          chunkCount: 0,
+          fileName: file.name,
+          updatedAt
+        });
+      }
+
+      const fullResumeData: ResumeInfo = {
         url,
         fileName: file.name,
-        updatedAt: new Date().toISOString().split('T')[0]
+        updatedAt
       };
-
-      await setDoc(doc(db, 'siteSettings', 'resume'), resumeData);
+      localStorage.setItem('portfolio_resume', JSON.stringify(fullResumeData));
 
       setUploadState('success');
       setSuccess(true);
@@ -95,7 +121,7 @@ export default function ManageResume({ resumeInfo, onRefresh }: ManageResumeProp
     } catch (err: any) {
       let msg = err.message || 'Failed to upload resume.';
       if (err.code === 'storage/unauthorized') {
-        msg = 'Unauthorized: Please check Firebase Storage permissions and ensure you are logged in.';
+        msg = 'Unauthorized: Please check Firebase permissions.';
       } else if (err.code === 'storage/canceled') {
         msg = 'Resume upload was canceled.';
       }
@@ -115,8 +141,9 @@ export default function ManageResume({ resumeInfo, onRefresh }: ManageResumeProp
     setIsDeleting(true);
     setError('');
     try {
-      const emptyResume: ResumeInfo = {
+      const emptyResume = {
         url: '',
+        chunkCount: 0,
         fileName: '',
         updatedAt: ''
       };

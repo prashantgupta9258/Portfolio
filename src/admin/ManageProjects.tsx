@@ -166,8 +166,8 @@ export default function ManageProjects({ projects, onRefresh, initialMode = 'lis
       let imageUrl = formData.image;
 
       if (imageFile) {
-        setUploadStatus('Resizing & compressing cover image (max 1000px, 75% quality)...');
-        const compressedBlob = await compressImageToBlob(imageFile, 1000, 1000, 0.75);
+        setUploadStatus('Resizing & compressing cover image...');
+        const compressedBlob = await compressImageToBlob(imageFile, 850, 850, 0.7);
         const safeName = imageFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
         imageUrl = await uploadWithResumableProgress(
           compressedBlob,
@@ -185,7 +185,7 @@ export default function ManageProjects({ projects, onRefresh, initialMode = 'lis
         for (let i = 0; i < additionalFiles.length; i++) {
           const file = additionalFiles[i];
           setUploadStatus(`Compressing screenshot ${i + 1} of ${additionalFiles.length}...`);
-          const compressedBlob = await compressImageToBlob(file, 1000, 1000, 0.75);
+          const compressedBlob = await compressImageToBlob(file, 800, 800, 0.65);
           const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
           const url = await uploadWithResumableProgress(
             compressedBlob,
